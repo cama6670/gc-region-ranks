@@ -1,0 +1,47 @@
+name: Mirror ladders
+
+on:
+  # Starts a poller whenever none is running; while a division is live the poller checks
+  # Silph Scope every minute and exits after ~5h40m, when the next queued run takes over.
+  schedule:
+    - cron: "7 * * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [site/**, scripts/**, config.json, .github/workflows/mirror.yml]
+
+# One poller at a time. A scheduled run queues behind the running poller;
+# a push or manual run replaces it so new code or config goes live right away.
+concurrency:
+  group: mirror
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
+
+permissions:
+  contents: write
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out gh-pages into public/
+        env:
+          REMOTE: https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git ls-remote --exit-code --heads origin gh-pages >/dev/null; then
+            git clone -q --depth 1 --branch gh-pages "$REMOTE" public
+          else
+            git init -q -b gh-pages public
+            git -C public remote add origin "$REMOTE"
+          fi
+          cp site/index.html public/
+          touch public/.nojekyll
+
+      - name: Poll Silph Scope and publish
+        run: >
+          python3 scripts/mirror.py --out public --watch --max-minutes 340 --git-push
+          ${{ github.event_name == 'schedule' && '--only-if-active' || '' }}
